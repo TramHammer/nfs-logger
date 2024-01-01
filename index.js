@@ -40,7 +40,7 @@ function discordWebhook() {
     ]
   }
   pendingEvents = ""
-  fetch('https://discord.com/api/webhooks/1190772673056342146/hW7MBES4jU1i8xMc5WmirGW9WyxOiI8-OexwhSNmWdVZK5LtV1LiG7_6Zf8yiPqn5fWD', {
+  fetch('', {
     method: "POST",
     headers: {
       'Content-type': 'application/json'
