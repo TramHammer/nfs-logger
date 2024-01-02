@@ -12,42 +12,88 @@ const smbConfig = {
   password: '',
 };
 
+const webhookURL = ''
 const smbClient = new SMB2(smbConfig); // Initialize the SMB client
 const db = new sqlite3.Database('files.db'); // SQLite database
 let pendingEvents = []
 let fileCount = 1;
 
-let pollingInProgress = false;
+let indexInProgress = false; // Flag to indicate default indexing in progress
+let pollingInProgress = false; // Flag to indicate regular polling in progress
 
 // Function to process file changes
 function processFileChange(filePath, eventType) {
   const now = new Date()
   console.log(`${fileCount} - ${now.toLocaleDateString()} - ${now.toLocaleTimeString()} - ${eventType} - ${filePath}`);
-  if (!pollingInProgress) pendingEvents.push(`${now.toLocaleDateString()} - ${now.toLocaleTimeString()} - ${eventType} - ${filePath}`);
+  if (!indexInProgress) pendingEvents.push(`${now.toLocaleTimeString()} - **${eventType}** - \`${filePath}\``);
   fileCount++;
 }
+
 function discordWebhook() {
+  if (pendingEvents.length == 0) return
+  if (pendingEvents.join("\n").length > 2000) {
+    console.log("pendingEvents is greater than 2000")
+    const chunkSize = 2000; // Maximum length for a Discord message
+    const chunks = [];
+
+    let currentChunk = '';
+    for (const event of pendingEvents) {
+      const eventLength = event.length;
+
+      if (currentChunk.length + eventLength > chunkSize) {
+        // If adding the current event exceeds the chunk size, start a new chunk
+        chunks.push(currentChunk);
+        currentChunk = event;
+      } else {
+        // Otherwise, add the event to the current chunk
+        currentChunk += '\n' + event;
+      }
+    }
+
+    // Add the last chunk, if any
+    if (currentChunk.length > 0) {
+      chunks.push(currentChunk);
+    }
+
+    for (const chunk of chunks) {
+      sendDiscordWebhook(chunk)
+    }
+    pendingEvents = []
+  } else {
+    sendDiscordWebhook(pendingEvents.join("\n"))
+    pendingEvents = []
+  }
+}
+
+async function sendDiscordWebhook(message) {
+  const now = new Date()
   let params = {
+    content: "",
+    tts: false,
     username: "Notify",
-    avatar_url: "",
     embeds: [
       {
         "title": `Event Summary`,
-        "description": `${pendingEvents.join("\n")}`,
-        "color": 15258703,
-        "timestamp": Date.now()
+        "description": `${message}`,
+        "fields": [],
+        "color": 13395968,
+        "timestamp": now.toISOString(),
+        "footer": {
+          "text": "10.0.1.23"
+        }
       }
     ]
   }
-  pendingEvents = ""
-  fetch('', {
+  await fetch(webhookURL, {
     method: "POST",
     headers: {
       'Content-type': 'application/json'
     },
     body: JSON.stringify(params)
   }).then(res => {
-    console.log(res);
+    console.log("Successfuly sent webhook message")
+  }).catch(res => {
+    console.error(res)
   })
 }
 
@@ -73,11 +119,10 @@ db.serialize(() => {
 async function indexSMBShare() {
   return new Promise((resolve, reject) => {
     smbClient.readdir(smbConfig.share, (err, files) => {
-      pollingInProgress = true;
-
+      indexInProgress = true;
       if (err) {
         reject(err);
-        pollingInProgress = false;
+        indexInProgress = false;
         return;
       }
 
@@ -95,16 +140,20 @@ async function indexSMBShare() {
     });
   });
 }
-console.log('\x1b[31m%s\x1b[0m',`Initial indexing starting.`,'\x1b[0m')
+console.log('\x1b[31m%s\x1b[0m', `Initial indexing starting.`, '\x1b[0m')
+
 // Perform initial indexing
 indexSMBShare()
   .then(() => {
-    pollingInProgress = false;
-    console.log('\x1b[31m%s\x1b[0m',`Initial indexing completed.`,'\x1b[0m');
+    indexInProgress = false;
+    console.log('\x1b[31m%s\x1b[0m', `Initial indexing completed.`, '\x1b[0m');
     pendingEvents = []
     startPolling();
   })
-  .catch(error => console.error(`Error during initial indexing: ${error.message}`));
+  .catch(error => {
+    console.error(`Error during initial indexing: ${error.message}`)
+    indexInProgress = false;
+  });
 
 // Watch for changes using chokidar
 const watcher = chokidar.watch(smbConfig.share, {
@@ -113,6 +162,7 @@ const watcher = chokidar.watch(smbConfig.share, {
   interval: 1000,   // Polling interval in milliseconds
 });
 
+startPolling();
 watcher
   .on('add', path => {
     if (!existingFiles.has(path)) {
@@ -133,17 +183,32 @@ watcher
   .on('unlinkDir', path => processFileChange(path, 'Directory deleted'))
   .on('error', error => console.error(`Error: ${error}`));
 
-// Poll SMB share periodically for changes
+
+
+
 function startPolling() {
-  console.log('\x1b[31m%s\x1b[0m',`Polling beginning..`,'\x1b[0m')
   setInterval(() => {
+    console.log('\x1b[31m%s\x1b[0m', `Polling beginning...`, '\x1b[0m')
+    if (pollingInProgress) {
+      console.log('\x1b[31m%s\x1b[0m', `Polling already in progress. Skipping this iteration.`, '\x1b[0m')
+      return;
+    }
+    discordWebhook()
+
+    pollingInProgress = true
+    let start = process.hrtime()
+
     smbClient.readdir(smbConfig.share, (err, files) => {
-      discordWebhook()
+      console.log("smbClient is polling")
       if (err) {
-        console.error('Error reading SMB share:', err);
+        pollingInProgress = false
         // Handle the specific error you want
         if (err.code === 'STATUS_LOGON_FAILURE') {
           console.error('Logon failure. Check username and password.');
+        } else if (err.code === "STATUS_BAD_NETWORK_NAME" || err.code === "EISCONN" || err.code === "ETIMEDOUT") {
+          console.error(`${err.code} ignored, skipping...`);
+        } else {
+          console.error('Error reading SMB share:', err);
         }
         return;
       }
@@ -159,7 +224,11 @@ function startPolling() {
           }
         });
       }
+      console.log('\x1b[31m%s\x1b[0m', `Polling Completed`, '\x1b[0m', `Time ${process.hrtime(start)[0]} s ${(process.hrtime(start)[1] / 1000000).toFixed(3)} ms`)
+
+      // Call discordWebhook and reset the flag inside the readdir callback
+      pollingInProgress = false;
     });
-    console.log('\x1b[31m%s\x1b[0m',`Polling Completed`,'\x1b[0m')
-  }, 1 * 60 * 6000); // Polling interval in milliseconds
+
+  }, 180 * 60 * 1000); // Polling interval in milliseconds
 }
