@@ -68,6 +68,38 @@ function discordWebhook() {
   }
 }
 
+async function sendDiscordWebhook(message) {
+  const now = new Date()
+  let params = {
+    content: "",
+    tts: false,
+    username: "10.0.1.23 Notification System",
+    embeds: [
+      {
+        "title": `Event Summary`,
+        "description": `${message}`,
+        "fields": [],
+        "color": 13395968,
+        "timestamp": now.toISOString(),
+        "footer": {
+          "text": "10.0.1.23"
+        }
+      }
+    ]
+  }
+  await fetch(webhookURL, {
+    method: "POST",
+    headers: {
+      'Content-type': 'application/json'
+    },
+    body: JSON.stringify(params)
+  }).then(res => {
+    console.log(`${now.toLocaleDateString()} - ${now.toLocaleTimeString()} - Successfully sent webhook message.`)
+  }).catch(res => {
+    console.error(res);
+  })
+}
+
 let existingFiles = new Set();
 let existingDirectories = new Set();
 
