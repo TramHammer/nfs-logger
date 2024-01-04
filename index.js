@@ -2,17 +2,20 @@ import SMB2 from 'v9u-smb2';
 import sqlite3 from 'sqlite3';
 import fs from 'fs';
 import chokidar from 'chokidar';
-import fetch from 'fetch'
+import fetch from 'node-fetch'
+
+// $env:NODE_OPTIONS = "--openssl-legacy-provider"
 
 // SMB file share configuration
 const smbConfig = {
-  share: '\\\\ip\\share-name',
+  share: '\\\\your-ip\\your-share',
   domain: '',
   username: '',
   password: '',
 };
 
 const webhookURL = ''
+
 const smbClient = new SMB2(smbConfig); // Initialize the SMB client
 const db = new sqlite3.Database('files.db'); // SQLite database
 let pendingEvents = []
@@ -65,52 +68,25 @@ function discordWebhook() {
   }
 }
 
-async function sendDiscordWebhook(message) {
-  const now = new Date()
-  let params = {
-    content: "",
-    tts: false,
-    username: "Notify",
-    embeds: [
-      {
-        "title": `Event Summary`,
-        "description": `${message}`,
-        "fields": [],
-        "color": 13395968,
-        "timestamp": now.toISOString(),
-        "footer": {
-          "text": "10.0.1.23"
-        }
-      }
-    ]
-  }
-  await fetch(webhookURL, {
-    method: "POST",
-    headers: {
-      'Content-type': 'application/json'
-    },
-    body: JSON.stringify(params)
-  }).then(res => {
-    console.log("Successfuly sent webhook message")
-  }).catch(res => {
-    console.error(res)
-  })
-}
-
-// Read existing file names from the database
 let existingFiles = new Set();
+let existingDirectories = new Set();
 
 db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS files (
       path TEXT PRIMARY KEY,
-      lastModified INTEGER
+      lastModified INTEGER,
+      type TEXT
     )
   `);
 
-  db.each('SELECT path FROM files', (err, row) => {
+  db.each('SELECT path, type FROM files', (err, row) => {
     if (!err && row) {
-      existingFiles.add(row.path);
+      if (row.type === 'file') {
+        existingFiles.add(row.path);
+      } else if (row.type === 'directory') {
+        existingDirectories.add(row.path);
+      }
     }
   });
 });
@@ -118,7 +94,7 @@ db.serialize(() => {
 // Function to index the entire SMB share
 async function indexSMBShare() {
   return new Promise((resolve, reject) => {
-    smbClient.readdir(smbConfig.share, (err, files) => {
+    smbClient.readdir(smbConfig.share, { list: true }, (err, files) => {
       indexInProgress = true;
       if (err) {
         reject(err);
@@ -129,9 +105,15 @@ async function indexSMBShare() {
       if (Array.isArray(files)) {
         files.forEach(file => {
           const filePath = file.filename;
-          existingFiles.add(filePath);
-          // Update the database
-          db.run('INSERT OR REPLACE INTO files (path, lastModified) VALUES (?, ?)', [filePath, Date.now()]);
+          if (file.isDirectory()) {
+            existingDirectories.add(filePath);
+            // Update the database
+            db.run('INSERT OR REPLACE INTO files (path, lastModified, type) VALUES (?, ?, ?)', [filePath, Date.now(), 'directory']);
+          } else {
+            existingFiles.add(filePath);
+            // Update the database
+            db.run('INSERT OR REPLACE INTO files (path, lastModified, type) VALUES (?, ?, ?)', [filePath, Date.now(), 'file']);
+          }
         });
         resolve();
       } else {
@@ -164,20 +146,34 @@ const watcher = chokidar.watch(smbConfig.share, {
 
 startPolling();
 watcher
-  .on('add', path => {
-    if (!existingFiles.has(path)) {
-      processFileChange(path, 'File added');
+.on('add', path => {
+  if (!existingFiles.has(path) && !existingDirectories.has(path)) {
+    const isDirectory = fs.statSync(path).isDirectory();
+    processFileChange(path, isDirectory ? 'Directory added' : 'File added');
+    if (isDirectory) {
+      existingDirectories.add(path);
+      // Update the database
+      db.run('INSERT OR REPLACE INTO files (path, lastModified, type) VALUES (?, ?, ?)', [path, Date.now(), 'directory']);
+    } else {
       existingFiles.add(path);
       // Update the database
-      db.run('INSERT OR REPLACE INTO files (path, lastModified) VALUES (?, ?)', [path, Date.now()]);
+      db.run('INSERT OR REPLACE INTO files (path, lastModified, type) VALUES (?, ?, ?)', [path, Date.now(), 'file']);
     }
-  })
+  }
+})  
   .on('change', path => processFileChange(path, 'File changed'))
   .on('unlink', path => {
-    processFileChange(path, 'File deleted');
-    existingFiles.delete(path);
-    // Remove the file from the database
-    db.run('DELETE FROM files WHERE path = ?', [path]);
+    const isDirectory = existingDirectories.has(path);
+    processFileChange(path, isDirectory ? 'Directory deleted' : 'File deleted');
+    if (isDirectory) {
+      existingDirectories.delete(path);
+      // Remove the directory from the database
+      db.run('DELETE FROM files WHERE path = ?', [path]);
+    } else {
+      existingFiles.delete(path);
+      // Remove the file from the database
+      db.run('DELETE FROM files WHERE path = ?', [path]);
+    }
   })
   .on('addDir', path => processFileChange(path, 'Directory added'))
   .on('unlinkDir', path => processFileChange(path, 'Directory deleted'))
