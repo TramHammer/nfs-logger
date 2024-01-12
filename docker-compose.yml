@@ -1,0 +1,12 @@
+version: '3.4'
+
+services:
+  nfslogger:
+    image: nfslogger
+    build:
+      context: .
+      dockerfile: ./Dockerfile
+    environment:
+      - NODE_ENV: production
+      - SHARE_PATH=""
+      - DISCORD_WEBHOOKURL=""

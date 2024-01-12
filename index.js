@@ -4,10 +4,10 @@ import chokidar from 'chokidar';
 import fetch from 'node-fetch';
 
 const nfsConfig = {
-  share: '\\\\share-ip\\share', // Replace with your NFS server and path
+  share: process.env.SHARE_PATH, // Replace with your NFS server and path
 };
 
-const webhookURL = '';
+const webhookURL = process.env.DISCORD_WEBHOOKURL;
 
 const db = new sqlite3.Database('files.db'); // SQLite database
 let pendingEvents = [];

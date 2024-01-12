@@ -1,5 +1,5 @@
 {
-  "name": "smbpoll",
+  "name": "nfslogger",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -7,11 +7,10 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
-  "author": "TramHammer",
+  "author": "",
   "license": "ISC",
   "dependencies": {
     "chokidar": "^3.5.3",
-    "fetch": "^1.1.0",
     "node-fetch": "^3.3.2",
     "sqlite3": "^5.1.7-rc.0",
     "v9u-smb2": "^1.0.6"
